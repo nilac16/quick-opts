@@ -38,7 +38,7 @@ typedef int opterrfn_t(int type, char shrt, char *lng, void *data);
 struct optspec {
     char        shrt;   /* The short option character (nul for no short opt) */
     const char *lng;    /* The long option string (NULL for no long opt) */
-    int         args;   /* The total possible positional args */
+    int         args;   /* The total possible positional args (-1: no limit) */
     optcbfn_t  *func;   /* Callback invoked on successful parsing */
 };
 

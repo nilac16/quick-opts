@@ -104,10 +104,10 @@ static void arg_unget(struct optinfo *info)
 static int opt_call_back(struct optinfo *info, const struct optspec *job)
 {
     char **args = info->argv;
+    unsigned i, lim = (unsigned)job->args;
     struct arg arg;
-    int i;
 
-    for (i = 0; i < job->args; i++) {
+    for (i = 0; i < lim; i++) {
         if (!arg_get(info, &arg)) {
             break;
         } else if (arg.type != ARG_TOKEN) {
@@ -115,7 +115,7 @@ static int opt_call_back(struct optinfo *info, const struct optspec *job)
             break;
         }
     }
-    return job->func((unsigned)i, args, info->data);
+    return job->func(i, args, info->data);
 }
 
 
