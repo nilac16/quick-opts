@@ -1,7 +1,26 @@
-#include <alloca.h>
 #include <stdlib.h>
 #include <string.h>
 #include "opt.h"
+
+#ifndef USE_ALLOCA
+#   define USE_ALLOCA 1
+#endif
+
+#if USE_ALLOCA
+#   if __has_include(<alloca.h>)
+#       include <alloca.h>
+
+#   elif defined(_MSC_VER) && _MSC_VER
+#       include <malloc.h>
+#       ifndef alloca
+#           define alloca(size) _alloca(size)
+#       endif
+
+#   else
+#       undef USE_ALLOCA
+#       define USE_ALLOCA 0
+#   endif
+#endif
 
 
 /** @brief Short option comparison function for qsort(3) and bsearch(3) */
@@ -252,9 +271,17 @@ int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[])
     unsigned i, nshrt = 0, nlng = 0;
     int res;
 
-    /* There is no way an array of pointers is going to cause an #SS fault */
+#if USE_ALLOCA
     shrt = alloca(sizeof *shrt * nopt);
     lng = alloca(sizeof *lng * nopt);
+
+#else
+    const struct optspec *shrtbuf[nopt], *lngbuf[nopt];
+
+    shrt = shrtbuf;
+    lng = lngbuf;
+
+#endif
     for (i = 0; i < nopt; i++) {
         if (opts[i].shrt) {
             shrt[nshrt++] = &opts[i];

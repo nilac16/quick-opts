@@ -11,7 +11,10 @@
  *      be zero! Positional arguments to short options are only parsed if the
  *      option is isolated
  *  @param args
- *      The positional arguments pulled for this option
+ *      The positional arguments pulled for this option. These are all non-
+ *      option tokens pulled immediately after parsing this option, up to the
+ *      limit provided in the option specification or the first option token,
+ *      whichever is reached first
  *  @param data
  *      User data provided at the top level
  *  @return Nonzero to immmediately terminate all argument parsing and return
@@ -82,7 +85,7 @@ struct optinfo {
  *      positional argument callback can change this behavior.
  *
  *      Option arguments may not begin with a dash or they will stop argument
- *      parsing.
+ *      parsing for the current option and be parsed as options themselves.
  *
  *      This function does not use any heap memory nor issue any stdio calls.
  *  @brief Parse command-line arguments according to @p opts
@@ -93,7 +96,8 @@ struct optinfo {
  *  @param opts
  *      Option specification table
  *  @returns Zero on complete success, nonzero if it was told to by a callback.
- *      The return value is exactly the same as the callback's return value
+ *      The return value is exactly the same as the terminating callback's
+ *      return value
  */
 int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[]);
 
