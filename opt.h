@@ -3,8 +3,29 @@
 #ifndef OPT_H
 #define OPT_H
 
+#if defined(__cplusplus) && __cplusplus
+extern "C" {
+#endif
 
-/** @brief Option callback
+
+/** @details This function signature is invoked for individual options, with
+ *      their parsed arguments *only*. You must disambiguate which option this
+ *      function is being called for by using a specific function per option, or
+ *      using the @p idx parameter.
+ * 
+ *      This signature is also used for the remaining positional arguments, in
+ *      which case @p count is the remainder of argc and @p args is the
+ *      remainder of argv.
+ *  @brief Option callback
+ *  @param idx
+ *      The index of this option in the list supplied to the topmost call. This
+ *      will allow easy disambiguation from a single callback function that can
+ *      then dispatch (i.e. a static member function dispatching to member
+ *      functions in C++) as described in the Win32 API tutorial.
+ * 
+ *      Note that using a different callback function for each option obviates
+ *      any need to even inspect this value, as you will know which option was
+ *      pulled for which function.
  *  @param count
  *      The number of positional arguments pulled for this option. If this was
  *      a short option that was part of a short option string, this will always
@@ -20,7 +41,7 @@
  *  @return Nonzero to immmediately terminate all argument parsing and return
  *      control
  */
-typedef int optcbfn_t(unsigned count, char *args[], void *data);
+typedef int optcbfn_t(int idx, unsigned count, char *args[], void *data);
 
 
 /** @brief Error function invoked when an argument is unrecognized
@@ -102,11 +123,23 @@ struct optinfo {
 int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[]);
 
 
+
+#if defined(__cplusplus) && __cplusplus
+}
+#endif
+
 #endif /* OPT_H */
 
 
 #if defined(OPT_IMPLEMENTATION) && OPT_IMPLEMENTATION
 
+#if (defined(__cplusplus) && __cplusplus) || __STDC_VERSION__ < 199901L
+#   if !defined(_MSC_VER)
+#       error("opt.h implementation must be compiled as C99 or later")
+#   endif
+#endif
+
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -223,14 +256,54 @@ static void arg_unget(struct optinfo *info)
 }
 
 
+/** @brief All of the option information wrapped up neatly */
+struct opttbl {
+    unsigned               nopt;    /* Total option count */
+    unsigned               nshrt;   /* Short option count */
+    unsigned               nlng;    /* Long option count */
+    const struct optspec  *opts;    /* The original list */
+    const struct optspec **shrt;    /* SORTED short options */
+    const struct optspec **lng;     /* SORTED long options */
+};
+
+
+/** @brief Find @p key in @p tbl
+ *  @param tbl
+ *      Options table
+ *  @param key
+ *      Option being searched
+ *  @param len
+ *      Nonzero if this is a long option
+ *  @returns A pointer to the found option or NULL if not found
+ */
+static const struct optspec *opt_find(const struct opttbl  *tbl,
+                                      const struct optspec *key,
+                                      int                   len)
+{
+    typedef int cmpfn_t(const void *, const void *);
+    const size_t size = sizeof tbl->opts;
+    const void *base = len ? tbl->lng       : tbl->shrt;
+    size_t nmemb     = len ? tbl->nlng      : tbl->nshrt;
+    cmpfn_t *cmpfn   = len ? optspec_lngcmp : optspec_shrtcmp;
+    const struct optspec **res;
+
+    res = bsearch(&key, base, nmemb, size, cmpfn);
+    return res ? *res : NULL;
+}
+
+
 /** @brief Check for some amount of arguments and invoke the option callback
  *  @param info
  *      Option information
+ *  @param tbl
+ *      Option table
  *  @param job
  *      The context for this particular option
  *  @returns Whatever the callback returns
  */
-static int opt_call_back(struct optinfo *info, const struct optspec *job)
+static int opt_call_back(struct optinfo       *info,
+                          const struct opttbl  *tbl,
+                          const struct optspec *job)
 {
     char **args = info->argv;
     unsigned i, lim = (unsigned)job->args;
@@ -244,7 +317,7 @@ static int opt_call_back(struct optinfo *info, const struct optspec *job)
             break;
         }
     }
-    return job->func(i, args, info->data);
+    return job->func((int)(job - tbl->opts), i, args, info->data);
 }
 
 
@@ -259,21 +332,22 @@ static int opt_call_back(struct optinfo *info, const struct optspec *job)
  *      The short option string
  *  @returns Nonzero if told to do so
  */
-static int opt_short(struct optinfo       *info,
-                     unsigned              nshrt,
-                     const struct optspec *shrt[],
-                     char                 *opt)
+static int opt_short(struct optinfo      *info,
+                     const struct opttbl *tbl,
+                     char                *opt)
 {
-    struct optspec key, *kyptr = &key, **fnd;
-    int res = 0, noargs;
+    const struct optspec *fnd;
+    struct optspec key;
+    int res = 0, noargs, idx;
 
     noargs = opt[1] != '\0';
     do {
         key.shrt = *opt;
-        fnd = bsearch(&kyptr, shrt, nshrt, sizeof *shrt, optspec_shrtcmp);
+        fnd = opt_find(tbl, &key, 0);
         if (fnd) {
-            res = noargs ? (*fnd)->func(0, info->argv, info->data)
-                         : opt_call_back(info, *fnd);
+            idx = (int)(fnd - tbl->opts);
+            res = noargs ? fnd->func(idx, 0, info->argv, info->data)
+                         : opt_call_back(info, tbl, fnd);
         } else {
             res = info->errcb(0, key.shrt, NULL, info->data);
         }
@@ -293,19 +367,18 @@ static int opt_short(struct optinfo       *info,
  *      The long option string
  *  @returns Nonzero if told to do so
  */
-static int opt_long(struct optinfo       *info,
-                    unsigned              nlng,
-                    const struct optspec *lng[],
-                    char                 *opt)
+static int opt_long(struct optinfo      *info,
+                    const struct opttbl *tbl,
+                    char                *opt)
 {
-    struct optspec key = {
-        .lng = opt
-    }, *kyptr = &key, **fnd;
+    const struct optspec *fnd;
+    struct optspec key;
     int res;
 
-    fnd = bsearch(&kyptr, lng, nlng, sizeof *lng, optspec_lngcmp);
+    key.lng = opt;
+    fnd = opt_find(tbl, &key, 1);
     if (fnd) {
-        res = opt_call_back(info, *fnd);
+        res = opt_call_back(info, tbl, fnd);
     } else {
         res = info->errcb(1, '\0', opt, info->data);
     }
@@ -316,21 +389,11 @@ static int opt_long(struct optinfo       *info,
 /** @brief Read all arguments
  *  @param info
  *      Option information
- *  @param nshrt
- *      Short option count
- *  @param shrt
- *      Array of pointers to the option table, sorted by short option
- *  @param nlng
- *      Long option count
- *  @param lng
- *      Array of pointers to the option table, sorted by long option
+ *  @param tbl
+ *      Sorted options table
  *  @returns Zero unless a callback says otherwise
  */
-static int opt_read(struct optinfo       *info,
-                    unsigned              nshrt,
-                    const struct optspec *shrt[],
-                    unsigned              nlng,
-                    const struct optspec *lng[])
+static int opt_read(struct optinfo *info, const struct opttbl *tbl)
 {
     struct arg arg;
     int res = 0;
@@ -341,12 +404,12 @@ static int opt_read(struct optinfo       *info,
             arg_unget(info);
             /* FALL THRU */
         case ARG_END:
-            return info->poscb(info->argc, info->argv, info->data);
+            return info->poscb(-1, info->argc, info->argv, info->data);
         case ARG_SHORT:
-            res = opt_short(info, nshrt, shrt, arg.str + 1);
+            res = opt_short(info, tbl, arg.str + 1);
             break;
         case ARG_LONG:
-            res = opt_long(info, nlng, lng, arg.str + 2);
+            res = opt_long(info, tbl, arg.str + 2);
             break;
         }
     }
@@ -377,33 +440,38 @@ static int opt_first(struct optinfo *info)
 
 int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[])
 {
-    const struct optspec **shrt, **lng;
-    unsigned i, nshrt = 0, nlng = 0;
+    struct opttbl tbl = {
+        .nopt  = nopt,
+        .opts  = opts,
+        .nlng  = 0,
+        .nshrt = 0
+    };
+    unsigned i;
     int res;
 
 #if USE_ALLOCA
-    shrt = alloca(sizeof *shrt * nopt);
-    lng = alloca(sizeof *lng * nopt);
+    tbl.shrt = alloca(sizeof *tbl.shrt * nopt);
+    tbl.lng = alloca(sizeof *tbl.lng * nopt);
 
 #else
     const struct optspec *shrtbuf[nopt], *lngbuf[nopt];
 
-    shrt = shrtbuf;
-    lng = lngbuf;
+    tbl.shrt = shrtbuf;
+    tbl.lng = lngbuf;
 
 #endif
     for (i = 0; i < nopt; i++) {
-        if (opts[i].shrt) {
-            shrt[nshrt++] = &opts[i];
+        if (isgraph(opts[i].shrt)) {
+            tbl.shrt[tbl.nshrt++] = &opts[i];
         }
-        if (opts[i].lng) {
-            lng[nlng++] = &opts[i];
+        if (opts[i].lng && *opts[i].lng) {
+            tbl.lng[tbl.nlng++] = &opts[i];
         }
     }
-    qsort(shrt, nshrt, sizeof *shrt, optspec_shrtcmp);
-    qsort(lng, nlng, sizeof *lng, optspec_lngcmp);
+    qsort(tbl.shrt, tbl.nshrt, sizeof *tbl.shrt, optspec_shrtcmp);
+    qsort(tbl.lng, tbl.nlng, sizeof *tbl.lng, optspec_lngcmp);
     res = opt_first(info);
-    return res ? res : opt_read(info, nshrt, shrt, nlng, lng);
+    return res ? res : opt_read(info, &tbl);
 }
 
 #endif /* OPT_IMPLEMENTATION */
