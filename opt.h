@@ -193,7 +193,7 @@ enum argtype {
     ARG_TOKEN,  /* Not an option */
     ARG_END,    /* "--" to stop parsing options */
     ARG_SHORT,  /* A short option string */
-    ARG_LONG,   /* A long option string */
+    ARG_LONG    /* A long option string */
 };
 
 
