@@ -12,7 +12,7 @@ extern "C" {
  *      their parsed arguments *only*. You must disambiguate which option this
  *      function is being called for by using a specific function per option, or
  *      using the @p idx parameter.
- * 
+ *
  *      This signature is also used for the remaining positional arguments, in
  *      which case @p count is the remainder of argc and @p args is the
  *      remainder of argv.
@@ -22,7 +22,7 @@ extern "C" {
  *      will allow easy disambiguation from a single callback function that can
  *      then dispatch (i.e. a static member function dispatching to member
  *      functions in C++) as described in the Win32 API tutorial.
- * 
+ *
  *      Note that using a different callback function for each option obviates
  *      any need to even inspect this value, as you will know which option was
  *      pulled for which function.
@@ -63,6 +63,7 @@ struct optspec {
     char        shrt;   /* The short option character (nul for no short opt) */
     const char *lng;    /* The long option string (NULL for no long opt) */
     int         args;   /* The total possible positional args (-1: no limit) */
+    /* int         req; *//* Total required arguments, regardless of type */
     optcbfn_t  *func;   /* Callback invoked on successful parsing */
 };
 
@@ -89,7 +90,7 @@ struct optinfo {
     enum optfst fstact; /* First argument disposition */
     enum optend endact; /* Endopt token disposition */
 
-    opterrfn_t *errcb;  /* Error callback */
+    opterrfn_t *errcb;  /* Error callback invoked on unrecognized options */
     optcbfn_t  *poscb;  /* Callback invoked after all options are parsed */
     void       *data;   /* Callback data */
 };
@@ -107,8 +108,13 @@ struct optinfo {
  *
  *      Option arguments may not begin with a dash or they will stop argument
  *      parsing for the current option and be parsed as options themselves.
+ *      TODO: Add a workaround for this, because this prevents negative numbers
+ *            from being used as option arguments
  *
  *      This function does not use any heap memory nor issue any stdio calls.
+ *      This function uses qsort(3), bsearch(3), and potentially alloca(3). If
+ *      alloca(3) is not allowed (-DUSE_ALLOCA=0) or unavailable, then VLAs are
+ *      used instead.
  *  @brief Parse command-line arguments according to @p opts
  *  @param info
  *      Option context structure
@@ -292,6 +298,33 @@ static const struct optspec *opt_find(const struct opttbl  *tbl,
 }
 
 
+/** @brief Check if @p arg represents a valid option argument string 
+ *  @param info
+ *      Option information
+ *  @param tbl
+ *      Option table
+ *  @param arg
+ *      The cmdarg in question
+ *  @returns Nonzero if @p arg is a valid option argument string for this
+ *      program
+ */
+static int opt_valid_argument(const struct optinfo *info,
+                              const struct opttbl  *tbl,
+                              const struct arg     *arg)
+{
+    (void)info;
+    (void)tbl;
+    if (arg->type == ARG_TOKEN) {
+        return 1;
+    } else if (arg->type == ARG_SHORT) {
+        /* Quick fix to allow negative numbers */
+        return isdigit(arg->str[1]);
+    } else {
+        return 0;
+    }
+}
+
+
 /** @brief Check for some amount of arguments and invoke the option callback
  *  @param info
  *      Option information
@@ -302,8 +335,8 @@ static const struct optspec *opt_find(const struct opttbl  *tbl,
  *  @returns Whatever the callback returns
  */
 static int opt_call_back(struct optinfo       *info,
-                          const struct opttbl  *tbl,
-                          const struct optspec *job)
+                         const struct opttbl  *tbl,
+                         const struct optspec *job)
 {
     char **args = info->argv;
     unsigned i, lim = (unsigned)job->args;
@@ -312,7 +345,7 @@ static int opt_call_back(struct optinfo       *info,
     for (i = 0; i < lim; i++) {
         if (!arg_get(info, &arg)) {
             break;
-        } else if (arg.type != ARG_TOKEN) {
+        } else if (!opt_valid_argument(info, tbl, &arg)) {
             arg_unget(info);
             break;
         }
