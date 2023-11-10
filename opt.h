@@ -1,10 +1,59 @@
 #pragma once
-
+/** @file opt.h single-header Unix-style command line argument parsing.
+ *
+ *  #define OPT_IMPLEMENTATION to nonzero to enable the implementation.
+ *
+ *  Create an array of type struct optspec to specify all of the potential
+ *  options to your program, e.g.:
+ *
+ *  static const struct optspec opts[] = {
+ *      { 's', "seed",      1, seed_callback         },
+ *      { 'n', "count",     1, count_callback        },
+ *      { 't', "test-mode", 0, test_callback         },
+ *      { 0,   "dry-run",   0, test_callback         },
+ *      { 'o', NULL,        1, output_short_callback },
+ *      { 0,   "output",    1, output_long_callback  },
+ *      { 'v', "vector",    3, vector_callback       }
+ *  };
+ *
+ *  Pass this table to opt_parse along with extra information in an optinfo
+ *  struct to have your callback functions invoked whenever their associated
+ *  option is recognized.
+ *
+ *  For some sense of scalability, option pointers are copied to two buffers and
+ *  sorted by short/long option. This allows a relatively rapid lookup of either
+ *  option size using bsearch(3).
+ *
+ *  By default, memory management is performed with alloca(3). You can override
+ *  this behavior in the implementation file by #defining the following macros
+ *  before #inclusion:
+ *
+ *    - OPT_TBL_LEN     Specifies the exact size of fixed stack arrays. This
+ *                      should be no less than the length of your struct optspec
+ *                      table or the latter options will be truncated. If this
+ *                      is #defined then the other macros are ignored.
+ *
+ *    - OPT_USE_ALLOCA  Specifies whether alloca(3) may be used to create the
+ *                      arrays. This is set by default. If this is set but
+ *                      alloca(3) is not supported, it will be turned off.
+ *
+ *    - OPT_USE_VLAS    Specifies whether VLAs are allowed. This is set by
+ *                      default. WARNING: This will cause problems with MSVC
+ *
+ *  If neither alloca(3) nor VLAs are allowed for memory management, then a
+ *  large fixed size buffer will be used. If the number of options exceeds the
+ *  buffer size in any case, then the latter options will be truncated.
+ */
 #ifndef OPT_H
 #define OPT_H
 
 #if defined(__cplusplus) && __cplusplus
+#   define OPT_EXTERN_C extern "C"
 extern "C" {
+
+#else
+#   define OPT_EXTERN_C
+
 #endif
 
 
@@ -21,7 +70,7 @@ extern "C" {
  *      The index of this option in the list supplied to the topmost call. This
  *      will allow easy disambiguation from a single callback function that can
  *      then dispatch (i.e. a static member function dispatching to member
- *      functions in C++) as described in the Win32 API tutorial.
+ *      functions in C++ as described in the Win32 API tutorial).
  *
  *      Note that using a different callback function for each option obviates
  *      any need to even inspect this value, as you will know which option was
@@ -63,7 +112,6 @@ struct optspec {
     char        shrt;   /* The short option character (nul for no short opt) */
     const char *lng;    /* The long option string (NULL for no long opt) */
     int         args;   /* The total possible positional args (-1: no limit) */
-    /* int         req; *//* Total required arguments, regardless of type */
     optcbfn_t  *func;   /* Callback invoked on successful parsing */
 };
 
@@ -143,26 +191,78 @@ int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[]);
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef USE_ALLOCA
-#   define USE_ALLOCA 1
 
+/** Check for the macros
+ *      OPT_TBL_LEN     The option table length, allows us to use fixed stack
+ *                      space. If this is defined, ignore the others
+ *      OPT_USE_ALLOCA  Controls whether we are allowed to try using alloca(3).
+ *                      Defaults to true
+ *      OPT_USE_VLAS    Controls whether we are allowed to use VLAs. Defaults to
+ *                      true
+ */
+
+
+/* Set default for OPT_USE_ALLOCA */
+#ifndef OPT_USE_ALLOCA
+#   define OPT_USE_ALLOCA 1
 #endif
 
-#if USE_ALLOCA
-#   if __has_include(<alloca.h>)
-#       include <alloca.h>
 
-#   elif defined(_MSC_VER) && _MSC_VER
-#       include <malloc.h>
-#       ifndef alloca
-#           define alloca(size) _alloca(size)
+/* Set default for OPT_USE_VLAS */
+#ifndef OPT_USE_VLAS
+#   define OPT_USE_VLAS 1
+#endif
+
+
+/* If this is set then don't even worry about the other options */
+#ifdef OPT_TBL_LEN
+#   undef  OPT_USE_ALLOCA
+#   define OPT_USE_ALLOCA 0
+
+/* Stack array size (not variable: Provided as OPT_TBL_LEN) */
+#   define OPT_VLEN(nopt) OPT_TBL_LEN
+/* #   pragma message("Using stack buffers with provided size") */
+
+#else
+/* No size provided, use either alloca(3), VLAs, or a fixed size */
+
+/* Double-check for alloca(3) support */
+#   if OPT_USE_ALLOCA
+#       if __has_include(<alloca.h>)
+        /* Have alloca(3) and are allowed to use it */
+#           include <alloca.h>
+/* #           pragma message("Using alloca(3) from alloca.h") */
+
+#       elif defined(_MSC_VER) && _MSC_VER
+        /* Have _alloca(3) and are allowed to use it */
+#           include <malloc.h>
+#           ifndef alloca
+#               define alloca(size) _alloca(size)
+#           endif
+/* #           pragma message("Using alloca(3) from malloc.h") */
+
+#       else
+        /* Do *not* have alloca(3), so turn it off */
+#           undef  OPT_USE_ALLOCA
+#           define OPT_USE_ALLOCA 0
+
 #       endif
-
-#   else
-#       undef USE_ALLOCA
-#       define USE_ALLOCA 0
 #   endif
+#   if !OPT_USE_ALLOCA
+/* alloca(3) was turned off and we do not have a supplied array length */
 
+#       if OPT_USE_VLAS
+        /* Stack array size (variable: VLAs are allowed) */
+#           define OPT_VLEN(nopt) nopt
+/* #           pragma message("Using VLAs") */
+
+#       else
+        /* Stack array size (fixed: Not provided and VLAs are not allowed) */
+#           define OPT_VLEN(nopt) 128
+/* #           pragma message("Using fixed size buffers!") */
+
+#       endif
+#   endif
 #endif
 
 
@@ -296,7 +396,7 @@ static const struct optspec *opt_find(const struct opttbl  *tbl,
 }
 
 
-/** @brief Check if @p arg represents a valid option argument string 
+/** @brief Check if @p arg represents a valid option argument string
  *  @param info
  *      Option information
  *  @param tbl
@@ -469,22 +569,35 @@ static int opt_first(struct optinfo *info)
 }
 
 
+#if !OPT_USE_ALLOCA
+/** @brief Find the min of @p x and @p y
+ *  @note This prevents GCC from emitting tautological comparison warnings
+ */
+static unsigned opt_min(unsigned x, unsigned y)
+{
+    return x < y ? x : y;
+}
+#endif
+
+
+OPT_EXTERN_C
 int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[])
 {
     struct opttbl tbl;
     unsigned i;
     int res;
 
-#if USE_ALLOCA
+#if OPT_USE_ALLOCA
     tbl.shrt = (const struct optspec **)alloca(sizeof *tbl.shrt * nopt);
     tbl.lng = (const struct optspec **)alloca(sizeof *tbl.lng * nopt);
-
 #else
-    const struct optspec *shrtbuf[nopt], *lngbuf[nopt];
+    const struct optspec *shrtbuf[OPT_VLEN(nopt)], *lngbuf[OPT_VLEN(nopt)];
 
     tbl.shrt = shrtbuf;
     tbl.lng = lngbuf;
 
+    /* Clamp to prevent overrunning */
+    nopt = opt_min(OPT_VLEN(nopt), nopt);
 #endif
 
     tbl.nopt = nopt;
