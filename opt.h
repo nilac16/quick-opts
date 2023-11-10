@@ -139,12 +139,6 @@ int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[]);
 
 #if defined(OPT_IMPLEMENTATION) && OPT_IMPLEMENTATION
 
-#if (defined(__cplusplus) && __cplusplus) || __STDC_VERSION__ < 199901L
-#   if !defined(_MSC_VER)
-#       error("opt.h implementation must be compiled as C99 or later")
-#   endif
-#endif
-
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -175,8 +169,10 @@ int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[]);
 /** @brief Short option comparison function for qsort(3) and bsearch(3) */
 static int optspec_shrtcmp(const void *p1, const void *p2)
 {
-    const struct optspec *const *os1 = p1, *const *os2 = p2;
+    const struct optspec *const *os1, *const *os2;
 
+    os1 = (const struct optspec *const *)p1;
+    os2 = (const struct optspec *const *)p2;
     return ((*os1)->shrt > (*os2)->shrt) - ((*os1)->shrt < (*os2)->shrt);
 }
 
@@ -184,8 +180,10 @@ static int optspec_shrtcmp(const void *p1, const void *p2)
 /** @brief Long option comparison function for qsort(3) and bsearch(3) */
 static int optspec_lngcmp(const void *p1, const void *p2)
 {
-    const struct optspec *const *os1 = p1, *const *os2 = p2;
+    const struct optspec *const *os1, *const *os2;
 
+    os1 = (const struct optspec *const *)p1;
+    os2 = (const struct optspec *const *)p2;
     return strcmp((*os1)->lng, (*os2)->lng);
 }
 
@@ -293,7 +291,7 @@ static const struct optspec *opt_find(const struct opttbl  *tbl,
     cmpfn_t *cmpfn   = len ? optspec_lngcmp : optspec_shrtcmp;
     const struct optspec **res;
 
-    res = bsearch(&key, base, nmemb, size, cmpfn);
+    res = (const struct optspec **)bsearch(&key, base, nmemb, size, cmpfn);
     return res ? *res : NULL;
 }
 
@@ -473,18 +471,13 @@ static int opt_first(struct optinfo *info)
 
 int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[])
 {
-    struct opttbl tbl = {
-        .nopt  = nopt,
-        .opts  = opts,
-        .nlng  = 0,
-        .nshrt = 0
-    };
+    struct opttbl tbl;
     unsigned i;
     int res;
 
 #if USE_ALLOCA
-    tbl.shrt = alloca(sizeof *tbl.shrt * nopt);
-    tbl.lng = alloca(sizeof *tbl.lng * nopt);
+    tbl.shrt = (const struct optspec **)alloca(sizeof *tbl.shrt * nopt);
+    tbl.lng = (const struct optspec **)alloca(sizeof *tbl.lng * nopt);
 
 #else
     const struct optspec *shrtbuf[nopt], *lngbuf[nopt];
@@ -493,6 +486,11 @@ int opt_parse(struct optinfo *info, unsigned nopt, const struct optspec opts[])
     tbl.lng = lngbuf;
 
 #endif
+
+    tbl.nopt = nopt;
+    tbl.opts = opts;
+    tbl.nlng = 0;
+    tbl.nshrt = 0;
     for (i = 0; i < nopt; i++) {
         if (isgraph(opts[i].shrt)) {
             tbl.shrt[tbl.nshrt++] = &opts[i];
